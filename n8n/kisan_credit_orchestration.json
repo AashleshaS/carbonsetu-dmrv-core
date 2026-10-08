@@ -1,0 +1,268 @@
+{
+  "name": "KisanCredit — NDVI Orchestration Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kisan-credit-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-ingest",
+      "name": "01 · Ingestion Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "kisan-credit-ingest",
+      "notes": "Receives farmer registration payload from triggerN8NWebhook() in src/lib/api.ts.\n\nExpected body:\n{\n  id: string,           // Supabase UUID\n  name: string,\n  latitude: number,     // WGS-84 (6 dp)\n  longitude: number,\n  farm_area_acres: number,\n  gat_number: string,   // 7/12 Satbara parcel ID\n  taluka: string,\n  village: string,\n  token_status: 'pending'\n}"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-lat-min",
+              "leftValue": "={{ $json.body.latitude }}",
+              "rightValue": 20.7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "cond-lat-max",
+              "leftValue": "={{ $json.body.latitude }}",
+              "rightValue": 21.5,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            },
+            {
+              "id": "cond-lon-min",
+              "leftValue": "={{ $json.body.longitude }}",
+              "rightValue": 78.6,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "cond-lon-max",
+              "leftValue": "={{ $json.body.longitude }}",
+              "rightValue": 79.7,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-cadastral-check",
+      "name": "02 · Cadastral Bounding Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "notes": "Validates GPS coordinates fall within Nagpur district bounding box.\n\nNagpur district extents (approximate WGS-84):\n  Latitude:  20.70 – 21.50 N\n  Longitude: 78.60 – 79.70 E\n\nTrue branch  → proceed to Copernicus auth.\nFalse branch → reject with 422 and log the out-of-bounds submission."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_id",
+              "value": "cdse-public"
+            },
+            {
+              "name": "username",
+              "value": "={{ $vars.COPERNICUS_USER }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $vars.COPERNICUS_PASS }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "password"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node-copernicus-auth",
+      "name": "03 · Copernicus CDSE Auth",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 220],
+      "notes": "Authenticates with Copernicus Dataspace (CDSE) using the Resource Owner\nPassword Credentials OIDC flow against the cdse-public client.\n\nCredentials must be stored as n8n Variables:\n  COPERNICUS_USER — registered CDSE account email\n  COPERNICUS_PASS — CDSE account password\n\nOn success: response.access_token is a short-lived JWT bearer token used\nin node 04 to query the Sentinel-2 OData product catalogue."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.DMRV_ENGINE_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Copernicus-Token",
+              "value": "={{ $('03 · Copernicus CDSE Auth').item.json.access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"id\":               \"{{ $('01 · Ingestion Webhook').item.json.body.id }}\",\n  \"name\":             \"{{ $('01 · Ingestion Webhook').item.json.body.name }}\",\n  \"latitude\":         {{ $('01 · Ingestion Webhook').item.json.body.latitude }},\n  \"longitude\":        {{ $('01 · Ingestion Webhook').item.json.body.longitude }},\n  \"farm_area_acres\":  {{ $('01 · Ingestion Webhook').item.json.body.farm_area_acres }},\n  \"gat_number\":       \"{{ $('01 · Ingestion Webhook').item.json.body.gat_number }}\",\n  \"taluka\":           \"{{ $('01 · Ingestion Webhook').item.json.body.taluka }}\",\n  \"village\":          \"{{ $('01 · Ingestion Webhook').item.json.body.village }}\"\n}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "node-dmrv-engine",
+      "name": "04 · Python dMRV Engine POST",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 220],
+      "notes": "POSTs the farmer record + Copernicus bearer token to the Flask dMRV\nmicroservice (app.py running on Gunicorn).\n\nThe engine:\n  1. Queries Sentinel-2 OData catalogue for the latest scene\n     intersecting POINT(longitude latitude)\n  2. Extracts Band 4 (Red) and Band 8 (NIR) reflectance values\n  3. Computes NDVI = (B8 - B4) / (B8 + B4)\n  4. Computes CO₂ = round(NDVI × (acres × 0.4047) × 10, 2)\n  5. PATCHes Supabase farmers table:\n       { ndvi_score, co2_tonnes, token_status: 'pending' }\n\nThis PATCH triggers the Supabase Realtime CDC event that the Admin\npanel (admin.tsx) subscribes to, which then auto-mints the token.\n\nn8n Variable required:\n  DMRV_ENGINE_URL — e.g. https://your-flask-server.com/process\n\nExpected response:\n  { status: 'success', ndvi: number, co2_tonnes: number }"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"rejected\", \"reason\": \"GPS coordinates outside Nagpur district bounding box\", \"latitude\": {{ $('01 · Ingestion Webhook').item.json.body.latitude }}, \"longitude\": {{ $('01 · Ingestion Webhook').item.json.body.longitude }} }",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "node-reject-oob",
+      "name": "05 · Reject Out-of-Bounds",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [720, 420],
+      "notes": "Returns HTTP 422 to the frontend when the GPS point falls outside\nthe Nagpur district bounding box. The farmer registration is still\nsaved in Supabase (insertFarmer fires before the webhook), but\nno NDVI processing will occur."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'queued', farmer_id: $('01 · Ingestion Webhook').item.json.body.id, message: 'NDVI processing started' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "node-respond-accepted",
+      "name": "06 · Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 220],
+      "notes": "Returns HTTP 202 to the frontend immediately after the dMRV engine\nhas been called. The actual Supabase write-back is async — the\nfrontend uses Supabase Realtime to receive the NDVI update."
+    }
+  ],
+  "connections": {
+    "01 · Ingestion Webhook": {
+      "main": [
+        [
+          {
+            "node": "02 · Cadastral Bounding Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 · Cadastral Bounding Check": {
+      "main": [
+        [
+          {
+            "node": "03 · Copernicus CDSE Auth",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05 · Reject Out-of-Bounds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 · Copernicus CDSE Auth": {
+      "main": [
+        [
+          {
+            "node": "04 · Python dMRV Engine POST",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 · Python dMRV Engine POST": {
+      "main": [
+        [
+          {
+            "node": "06 · Respond 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2026-05-28T00:00:00.000Z",
+      "updatedAt": "2026-05-28T00:00:00.000Z",
+      "id": "tag-kisan-credit",
+      "name": "kisan-credit"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-05-28T00:00:00.000Z",
+  "versionId": "1.0.0",
+  "_meta": {
+    "description": "KisanCredit NDVI orchestration pipeline. Import into n8n via Settings → Import Workflow. Set n8n Variables: COPERNICUS_USER, COPERNICUS_PASS, DMRV_ENGINE_URL before activating.",
+    "nodeFlow": [
+      "01 · Ingestion Webhook  — receives POST from triggerN8NWebhook() in api.ts",
+      "02 · Cadastral Bounding Check — IF node: Nagpur bbox lat 20.7-21.5, lon 78.6-79.7",
+      "03 · Copernicus CDSE Auth — OIDC password grant → access_token",
+      "04 · Python dMRV Engine POST — Flask /process: Sentinel-2 → NDVI → CO₂ → Supabase PATCH",
+      "05 · Reject Out-of-Bounds — 422 response for GPS outside Nagpur district",
+      "06 · Respond 202 Accepted — async acknowledgement back to frontend"
+    ],
+    "requiredVariables": {
+      "COPERNICUS_USER": "Registered Copernicus Dataspace email",
+      "COPERNICUS_PASS": "Copernicus Dataspace password",
+      "DMRV_ENGINE_URL": "URL of the Flask dMRV microservice /process endpoint"
+    }
+  }
+}
