@@ -50,7 +50,7 @@ function RegistryPage() {
 
   useEffect(() => {
     getAllTokens()
-      .then((d) => setTokens(d as Token[]))
+      .then((d) => setTokens(d as unknown as Token[]))
       .catch((e: any) => setLoadError(e?.message ?? "Failed to load credits."))
       .finally(() => setLoading(false));
   }, []);

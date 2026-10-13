@@ -30,6 +30,8 @@ export type Database = {
           status: string
           taluka: string | null
           token_amount: number | null
+          /** On-chain uint256 tokenId — added by migration 20260528000000_add_token_id_onchain.sql */
+          token_id_onchain: string | null
           village: string | null
         }
         Insert: {
@@ -47,6 +49,7 @@ export type Database = {
           status?: string
           taluka?: string | null
           token_amount?: number | null
+          token_id_onchain?: string | null
           village?: string | null
         }
         Update: {
@@ -64,6 +67,7 @@ export type Database = {
           status?: string
           taluka?: string | null
           token_amount?: number | null
+          token_id_onchain?: string | null
           village?: string | null
         }
         Relationships: [

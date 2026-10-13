@@ -1,6 +1,7 @@
 {
-  "name": "tanstack_start_ts",
+  "name": "carbonsetu-dmrv-core",
   "private": true,
+  "description": "Autonomous all-weather dMRV pipeline for agricultural carbon credits using dual-satellite telemetry and Polygon settlement",
   "sideEffects": false,
   "type": "module",
   "scripts": {

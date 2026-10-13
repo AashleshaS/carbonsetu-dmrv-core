@@ -5,6 +5,14 @@
 import { ethers } from "ethers";
 import { CONFIG } from "./config";
 
+// Extend Window to include MetaMask's ethereum provider
+declare global {
+  interface Window {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ethereum?: any;
+  }
+}
+
 // ── ABI ───────────────────────────────────────────────────────────────────────
 
 const CONTRACT_ABI = [

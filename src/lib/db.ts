@@ -180,7 +180,21 @@ export async function insertToken(token: TokenInput) {
 
 // ── Purchases ─────────────────────────────────────────────────────────────────
 
-export async function insertPurchase(purchase: Record<string, unknown>) {
+export type PurchaseInput = {
+  token_id: string;
+  farmer_id: string;
+  buyer_name: string;
+  buyer_company: string;
+  buyer_email: string;
+  amount_paid: number;
+  farmer_payout: number;
+  platform_fee: number;
+  decentro_payment_ref: string | null;
+  certificate_id: string;
+  status: string;
+};
+
+export async function insertPurchase(purchase: PurchaseInput) {
   const { data, error } = await supabase
     .from("purchases")
     .insert([purchase])
